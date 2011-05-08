@@ -5,7 +5,6 @@
 #include <initguid.h>
 #include <dxva2api.h>
 
-#define EXCLUSIVE_TRACE_ENABLE
 #include "ffmpeg.h"
 #include "h264_detail.h"
 #include "common/hardware_env.h"
