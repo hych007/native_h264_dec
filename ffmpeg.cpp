@@ -130,12 +130,14 @@ void initYCbCr2RGBCoef(TYCbCr2RGBCoef* c,
     c->RGBAdd1 = static_cast<int>(RGBBlackLevel) - sub;
     c->RGBAdd3 = (c->RGBAdd1 << 8) + (c->RGBAdd1 << 16) + c->RGBAdd1;
 }
+
 }
 
 CSWScale::CSWScale()
     : m_cont()
     , m_width(0)
     , m_height(0)
+    , m_outCsp(0)
 {
 }
 
@@ -158,6 +160,8 @@ bool CSWScale::Init(const CCodecContext& codec, IMediaSample* sample)
 
     m_width = header.biWidth;
     m_height = abs(header.biHeight);
+    m_outCsp = (MEDIASUBTYPE_YV12 == m->subtype) ?
+        (FF_CSP_420P | FF_CSP_FLAGS_YUV_ADJ) : FF_CSP_YUY2;
     DeleteMediaType(m);
 
     TYCbCr2RGBCoef coeffs;
@@ -190,7 +194,7 @@ bool CSWScale::Init(const CCodecContext& codec, IMediaSample* sample)
             codecCont->width, codecCont->height,
             csp_ffdshow2mplayer(csp_lavc2ffdshow(codecCont->pix_fmt)),
             codecCont->width, codecCont->height,
-            csp_ffdshow2mplayer(FF_CSP_420P | FF_CSP_FLAGS_YUV_ADJ), &params,
+            csp_ffdshow2mplayer(m_outCsp), &params,
             NULL, NULL, swscaleTable),
         sws_freeContext);
     return true;
@@ -202,12 +206,11 @@ bool CSWScale::Convert(const CVideoFrame& frame, void* buf)
     stride_t srcStride[4];
     stride_t dstStride[4];
 
-    const TcspInfo* outcspInfo =
-        csp_getInfo(FF_CSP_420P | FF_CSP_FLAGS_YUV_ADJ);
+    const TcspInfo* outcspInfo = csp_getInfo(m_outCsp);
     const AVFrame* rawFrame = const_cast<CVideoFrame&>(frame).getFrame();
     for (int i = 0; i < 4; ++i)
     {
-        srcStride[i] = (stride_t)rawFrame->linesize[i];
+        srcStride[i] = static_cast<stride_t>(rawFrame->linesize[i]);
         dstStride[i] = m_width >> outcspInfo->shiftX[i];
         if (!i)
             dst[i] = reinterpret_cast<uint8*>(buf);
@@ -216,7 +219,7 @@ bool CSWScale::Convert(const CVideoFrame& frame, void* buf)
                 (m_height >> outcspInfo->shiftY[i - 1]);
     }
 
-    int csp = FF_CSP_420P | FF_CSP_FLAGS_YUV_ADJ;
+    int csp = m_outCsp;
     if (outcspInfo->id == FF_CSP_420P)
         csp_yuv_adj_to_plane(csp, outcspInfo, (m_height + 1) / 2 * 2,
                              (unsigned char**)dst, dstStride);
@@ -334,6 +337,11 @@ CCodecContext::CCodecContext()
 
 CCodecContext::~CCodecContext()
 {
+    if (m_cont->thread_count > 1)
+    {
+        avcodec_thread_free(m_cont.get());
+        m_cont->thread_count = 1;
+    }
 }
 
 bool CCodecContext::Init(AVCodec* c, const CMediaType& mediaType)
@@ -496,6 +504,7 @@ int CCodecContext::Decode(CVideoFrame* frame, const void* buf, int size)
         reinterpret_cast<AVCodecContext*>(m_cont.get()), frame->getFrame(),
         &frameFinished, reinterpret_cast<const uint8_t*>(buf),
         size);
+
     frame->SetComplete(frameFinished && frame->getFrame()->data[0]);
     return usedBytes;
 }

@@ -18,11 +18,13 @@ public:
 
     bool Init(const CCodecContext& codec, IMediaSample* sample);
     bool Convert(const CVideoFrame& frame, void* buf);
+    int GetOutCsp() const { return m_outCsp; }
 
 private:
     boost::shared_ptr<void> m_cont;
     int m_width;
     int m_height;
+    int m_outCsp;
 };
 
 //------------------------------------------------------------------------------

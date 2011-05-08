@@ -5,6 +5,7 @@
 #include <initguid.h>
 #include <dxva2api.h>
 
+#define EXCLUSIVE_TRACE_ENABLE
 #include "ffmpeg.h"
 #include "h264_detail.h"
 #include "common/hardware_env.h"
@@ -397,7 +398,6 @@ CH264DXVA1Decoder::CH264DXVA1Decoder(const GUID& decoderID,
     m_picParams.MinLumaBipredSize8x8Flag = 1;
     m_picParams.StatusReportFeedbackNumber = 0; // Use to report status
 
-    assert(arraysize(m_picParams.RefFrameList) == 16);
     for (int i =0; i < arraysize(m_picParams.RefFrameList); ++i)
     {
         m_picParams.RefFrameList[i].AssociatedFlag = 1;
@@ -500,14 +500,8 @@ HRESULT CH264DXVA1Decoder::Decode(const void* data, int size, int64 start,
     if (FAILED(r))
         return r;
 
-    if (flush_flag)
-    {
-        
-    }
-
     h264_detail::SetCurrentPicIndex(surfaceIndex, &m_picParams, getPreDecode());
 
-    TRACE_EXCL(L"\n Begin frame: %d", surfaceIndex);
     r = beginFrame(surfaceIndex);
     if (FAILED(r))
         return r;

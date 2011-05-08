@@ -9,6 +9,7 @@
 
 #include "ffmpeg.h"
 #include "h264_decoder.h"
+#include "chromium/base/win_util.h"
 #include "common/dshow_util.h"
 #include "common/hardware_env.h"
 #include "common/intrusive_ptr_helper.h"
@@ -249,8 +250,11 @@ HRESULT CH264DecoderOutputPin::GetUncompSurfacesInfo(
                                       reinterpret_cast<void**>(&accel));
         if (SUCCEEDED(r) && accel)
         {
-            uncompBufInfo->dwMaxNumSurfaces = 16;
-            uncompBufInfo->dwMinNumSurfaces = 16;
+            const int surfCount =
+                (win_util::GetWinVersion() >= win_util::WINVERSION_VISTA) ?
+                    22 : 16;
+            uncompBufInfo->dwMaxNumSurfaces = surfCount;
+            uncompBufInfo->dwMinNumSurfaces = surfCount;
             r = m_decoder->ConfirmDXVA1UncompFormat(
                 accel.get(), profileID,
                 &uncompBufInfo->ddUncompPixelFormat);
@@ -350,7 +354,8 @@ struct { const GUID& SubType; int PlaneCount; int FourCC; } supportedFormats[] =
     { MEDIASUBTYPE_NV12, 1, MAKEFOURCC('D','X','v','A') },
 
     // Software formats
-    { MEDIASUBTYPE_YV12, 3, MAKEFOURCC('Y','V','1','2') }
+    { MEDIASUBTYPE_YV12, 3, MAKEFOURCC('Y','V','1','2') },
+    { MEDIASUBTYPE_YUY2, 3, MAKEFOURCC('Y','U','Y','2') }
 };
 
 enum KDXVAH264Compatibility
@@ -404,21 +409,21 @@ int checkHWCompatibilityForH264(int width, int height, int videoLevel,
         {
             // nVidia cards support level 5.1 since drivers v6.14.11.7800 for
             // XP and drivers v7.15.11.7800 for Vista/7
-//             if (IsVista())
-//             {
-//                 if (hasDriverVersionReached(videoDriverVersion, 7, 15, 11,
-//                                             7800))
-//                 {
-//                     noLevel51Support = 0;
-// 
-//                     // max ref frames is 16 for HD and 11 otherwise
-//                     if (width >= 1280)
-//                         maxRefFrames = 16;
-//                     else
-//                         maxRefFrames = 11;
-//                 }
-//             }
-//             else
+            if (win_util::GetWinVersion() >= win_util::WINVERSION_VISTA)
+            {
+                if (hasDriverVersionReached(videoDriverVersion, 7, 15, 11,
+                                            7800))
+                {
+                    noLevel51Support = 0;
+
+                    // max ref frames is 16 for HD and 11 otherwise
+                    if (width >= 1280)
+                        maxRefFrames = 16;
+                    else
+                        maxRefFrames = 11;
+                }
+            }
+            else
             {
                 if (hasDriverVersionReached(videoDriverVersion, 6, 14, 11,
                                             7800))
