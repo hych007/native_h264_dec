@@ -248,7 +248,7 @@ CH264SWDecoder::~CH264SWDecoder()
 }
 
 bool CH264SWDecoder::Init(const DDPIXELFORMAT& pixelFormat,
-                          const CCodecContext* cont, int64 averageTimePerFrame)
+                          int64 averageTimePerFrame)
 {
     getPreDecode()->SetThreadNumber(
         CHardwareEnv::get()->GetNumOfLogicalProcessors());
@@ -413,11 +413,9 @@ CH264DXVA1Decoder::~CH264DXVA1Decoder()
 }
 
 bool CH264DXVA1Decoder::Init(const DDPIXELFORMAT& pixelFormat,
-                             const CCodecContext* cont,
                              int64 averageTimePerFrame)
 {
     assert(m_accel);
-    assert(cont);
 
     DXVA_ConfigPictureDecode configRequested;
     memset(&configRequested, 0, sizeof(configRequested));
@@ -449,8 +447,8 @@ bool CH264DXVA1Decoder::Init(const DDPIXELFORMAT& pixelFormat,
 
     AMVAUncompDataInfo dataInfo;
     DWORD d = compBufferCount;
-    dataInfo.dwUncompWidth = 720;
-    dataInfo.dwUncompHeight = 480;
+    dataInfo.dwUncompWidth = getPreDecode()->GetWidth();
+    dataInfo.dwUncompHeight = getPreDecode()->GetHeight();
     memcpy(&dataInfo.ddUncompPixelFormat, &pixelFormat, sizeof(pixelFormat));
     AMVACompBufferInfo compBufInfo[compBufferCount];
     r = m_accel->GetCompBufferInfo(&GetDecoderID(), &dataInfo, &d, compBufInfo);

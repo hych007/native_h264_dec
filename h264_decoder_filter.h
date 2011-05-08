@@ -136,25 +136,25 @@ public:
     HRESULT ActivateDXVA1(IAMVideoAccelerator* accel, const GUID* decoderID,
                           const AMVAUncompDataInfo& uncompInfo,
                           int surfaceCount);
+    HRESULT ActivateDXVA2();
+    HRESULT CreateDXVA2Decoder(const GUID& decoderID);
     bool IsFormatSupported(const GUID& formatID);
     HRESULT ConfirmDXVA1UncompFormat(IAMVideoAccelerator* accel,
                                      const GUID* decoderID,
                                      DDPIXELFORMAT* pixelFormat);
+    HRESULT ConfirmDXVA2UncompFormat(
+        IDirectXVideoDecoderService* decoderService, const GUID* decoderID,
+        DXVA2_ConfigPictureDecode* selectedConfig);
     void SetDXVA1PixelFormat(const DDPIXELFORMAT& pixelFormat);
 
     boost::intrusive_ptr<IDirect3DDeviceManager9> Get3DDevManager()
     {
-        return m_3DDevManager;
+        return m_devManager;
     }
 
     DXVA2_VideoDesc m_videoDesc;
     HANDLE m_devHandle;
     void FlushDXVADecoder() {}
-    HRESULT CreateDXVA2Decoder(UINT nNumRenderTargets,
-                               IDirect3DSurface9** pDecoderRenderTargets)
-    {
-        return E_FAIL;
-    }
     bool UseDXVA2() { return false; }
 
 protected:
@@ -163,11 +163,17 @@ protected:
 private:
     std::vector<boost::shared_ptr<CMediaType> > m_mediaTypes;
     boost::shared_ptr<CCodecContext> m_preDecode;
-    boost::intrusive_ptr<IDirect3DDeviceManager9> m_3DDevManager;
     DDPIXELFORMAT m_pixelFormat;
     Lock m_decodeAccess;
     boost::shared_ptr<CH264Decoder> m_decoder;
     int64 m_averageTimePerFrame;
+
+    // DXVA2 members.
+    boost::intrusive_ptr<IDirect3DDeviceManager9> m_devManager;
+    boost::shared_ptr<void> m_deviceHandle;
+    boost::intrusive_ptr<IDirectXVideoDecoderService> m_decoderService;
+    DXVA2_ConfigPictureDecode m_config;
+    std::vector<boost::intrusive_ptr<IDirect3DSurface9> > m_surfaces;
 };
 
 #endif  // _H264_DECODER_FILTER_H_

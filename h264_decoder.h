@@ -24,7 +24,7 @@ public:
     const GUID& GetDecoderID() const { return m_decoderID; }
 
     virtual bool Init(const DDPIXELFORMAT& pixelFormat,
-                      const CCodecContext* cont, int64 averageTimePerFrame) = 0;
+                      int64 averageTimePerFrame) = 0;
     virtual HRESULT Decode(const void* data, int size, int64 start, int64 stop,
                            IMediaSample* outSample, int* bytesUsed) = 0;
     virtual HRESULT DisplayNextFrame(IMediaSample* sample) { return E_NOTIMPL; }
@@ -91,7 +91,7 @@ public:
     virtual ~CH264SWDecoder();
 
     virtual bool Init(const DDPIXELFORMAT& pixelFormat,
-                      const CCodecContext* cont, int64 averageTimePerFrame);
+                      int64 averageTimePerFrame);
     virtual HRESULT Decode(const void* data, int size, int64 start, int64 stop,
                            IMediaSample* outSample, int* bytesUsed);
 
@@ -109,7 +109,7 @@ public:
     virtual ~CH264DXVA1Decoder();
 
     virtual bool Init(const DDPIXELFORMAT& pixelFormat,
-                      const CCodecContext* cont, int64 averageTimePerFrame);
+                      int64 averageTimePerFrame);
     virtual HRESULT Decode(const void* data, int size, int64 start, int64 stop,
                            IMediaSample* outSample, int* bytesUsed);
     virtual HRESULT DisplayNextFrame(IMediaSample* sample) { return S_OK; }

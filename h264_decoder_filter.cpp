@@ -2,10 +2,13 @@
 
 #include <cassert>
 
+#include <boost/function.hpp>
+#include <boost/bind.hpp>
 #include <initguid.h>
 #include <dvdmedia.h>
 #include <mfapi.h>
 #include <mferror.h>
+#include <evr.h>
 
 #include "ffmpeg.h"
 #include "h264_decoder.h"
@@ -18,6 +21,16 @@
 using std::vector;
 using boost::shared_ptr;
 using boost::intrusive_ptr;
+using boost::function;
+using boost::bind;
+
+namespace
+{
+inline int getDecodeSurfacesCount()
+{
+    return (win_util::GetWinVersion() >= win_util::WINVERSION_VISTA) ? 22 : 16;
+}
+}
 
 CDXVA2Sample::CDXVA2Sample(CDXVA2Allocator *alloc, HRESULT* r)
     : CMediaSample(L"CDXVA2Sample", alloc, r, NULL, 0)
@@ -154,10 +167,10 @@ HRESULT CDXVA2Allocator::Alloc()
         }
         if (FAILED(r))
             break;
-
-        r = m_decoder->CreateDXVA2Decoder(m_lCount, m_surfaces);
-        if (FAILED (r))
-            break;
+// 
+//         r = m_decoder->CreateDXVA2Decoder(m_lCount, m_surfaces);
+//         if (FAILED (r))
+//             break;
 
         m_bChanged = FALSE;
         return r;
@@ -250,9 +263,7 @@ HRESULT CH264DecoderOutputPin::GetUncompSurfacesInfo(
                                       reinterpret_cast<void**>(&accel));
         if (SUCCEEDED(r) && accel)
         {
-            const int surfCount =
-                (win_util::GetWinVersion() >= win_util::WINVERSION_VISTA) ?
-                    22 : 16;
+            const int surfCount = getDecodeSurfacesCount();
             uncompBufInfo->dwMaxNumSurfaces = surfCount;
             uncompBufInfo->dwMinNumSurfaces = surfCount;
             r = m_decoder->ConfirmDXVA1UncompFormat(
@@ -682,13 +693,15 @@ HRESULT CH264DecoderFilter::CompleteConnect(PIN_DIRECTION dir, IPin* receivePin)
     {
         if (m_decoder) // DXVA1 has been activated.
         {
-            if (!m_decoder->Init(m_pixelFormat, m_preDecode.get(),
-                                 m_averageTimePerFrame))
+            if (!m_decoder->Init(m_pixelFormat, m_averageTimePerFrame))
                 m_decoder.reset();
         }
         
-        if (!m_decoder)
-            m_decoder.reset(new CH264SWDecoder(m_preDecode.get()));
+        if (!m_decoder) // Not support DXVA1.
+        {
+            if (!SUCCEEDED(ActivateDXVA2()))
+                m_decoder.reset(new CH264SWDecoder(m_preDecode.get()));
+        }
     }
 
     return CTransformFilter::CompleteConnect(dir, receivePin);
@@ -821,6 +834,105 @@ HRESULT CH264DecoderFilter::ActivateDXVA1(IAMVideoAccelerator* accel,
     return S_OK;
 }
 
+HRESULT CH264DecoderFilter::ActivateDXVA2()
+{
+    IPin* pin = m_pOutput->GetConnected();
+    if (!pin)
+        return VFW_E_NOT_CONNECTED;
+
+    intrusive_ptr<IMFGetService> getService;
+    HRESULT r = pin->QueryInterface(IID_IMFGetService,
+                                    reinterpret_cast<void**>(&getService));
+    if (FAILED(r))
+        return r;
+
+    intrusive_ptr<IDirect3DDeviceManager9> devManager;
+    r = getService->GetService(MR_VIDEO_ACCELERATION_SERVICE,
+                               IID_IDirect3DDeviceManager9,
+                               reinterpret_cast<void**>(&devManager));
+    if (FAILED(r))
+        return r;
+
+    HANDLE device;
+    r = devManager->OpenDeviceHandle(&device);
+    if (FAILED(r))
+        return r;
+
+    function<HRESULT (HANDLE)> closeMethod =
+        bind(&IDirect3DDeviceManager9::CloseDeviceHandle, devManager, _1);
+    shared_ptr<void> deviceHandle(device, closeMethod);
+
+    intrusive_ptr<IDirectXVideoDecoderService> decoderService;
+    r = devManager->GetVideoService(device, IID_IDirectXVideoDecoderService,
+                                    reinterpret_cast<void**>(&decoderService));
+    if (FAILED(r))
+        return r;
+
+    UINT devGUIDCount;
+    GUID* devGUIDs;
+    r = decoderService->GetDecoderDeviceGuids(&devGUIDCount, &devGUIDs);
+    if (FAILED(r))
+        return r;
+
+    shared_ptr<void> autoReleaseGUID(devGUIDs, CoTaskMemFree);
+    for (int i = 0; i < devGUIDCount; ++i)
+    {
+        if (!IsFormatSupported(devGUIDs[i]))
+            continue;
+
+        DXVA2_ConfigPictureDecode selectedConfig;
+        r = ConfirmDXVA2UncompFormat(decoderService.get(), &devGUIDs[i],
+                                     &selectedConfig);
+        if (FAILED(r))
+            continue;
+
+        m_devManager = devManager;
+        m_deviceHandle = deviceHandle;
+        m_decoderService = decoderService;
+        m_config = selectedConfig;
+        return CreateDXVA2Decoder(devGUIDs[i]);
+    }
+
+    return E_FAIL;
+}
+
+HRESULT CH264DecoderFilter::CreateDXVA2Decoder(const GUID& decoderID)
+{
+    assert(m_devManager);
+    intrusive_ptr<IDirectXVideoAccelerationService> accelService;
+    HRESULT r = m_devManager->GetVideoService(
+        reinterpret_cast<HANDLE>(m_deviceHandle.get()),
+        IID_IDirectXVideoAccelerationService,
+        reinterpret_cast<void**>(&accelService));
+    if (FAILED(r))
+        return r;
+
+    // Allocate a new array of pointers.
+    const int surfaceCount = getDecodeSurfacesCount();
+    scoped_array<IDirect3DSurface9*> surfaces(
+        new IDirect3DSurface9*[surfaceCount]);
+
+    // Allocate the surfaces.
+    r = accelService->CreateSurface(m_preDecode->GetWidth(),
+                                    m_preDecode->GetHeight(), surfaceCount - 1,
+                                    m_videoDesc.Format, D3DPOOL_DEFAULT, 0,
+                                    DXVA2_VideoDecoderRenderTarget,
+                                    surfaces.get(), NULL);
+    if (FAILED(r))
+        return r;
+
+    // Get the surfaces managed.
+    for (int i = 0; i < surfaceCount; ++i)
+        m_surfaces.push_back(intrusive_ptr<IDirect3DSurface9>(surfaces[i]));
+
+    intrusive_ptr<IDirectXVideoDecoder> accel;
+    r = m_decoderService->CreateVideoDecoder(
+        decoderID, &m_videoDesc, &m_config, surfaces.get(), surfaceCount,
+        reinterpret_cast<IDirectXVideoDecoder**>(&accel));
+
+    return r;
+}
+
 bool CH264DecoderFilter::IsFormatSupported(const GUID& formatID)
 {
     for (int i = 0; i < arraysize(supportedFormats); ++i)
@@ -862,6 +974,54 @@ HRESULT CH264DecoderFilter::ConfirmDXVA1UncompFormat(IAMVideoAccelerator* accel,
     return E_FAIL;
 }
 
+HRESULT CH264DecoderFilter::ConfirmDXVA2UncompFormat(
+    IDirectXVideoDecoderService* decoderService, const GUID* decoderID,
+    DXVA2_ConfigPictureDecode* selectedConfig)
+{
+    assert(selectedConfig);
+    UINT formatCount;
+    D3DFORMAT* formats;
+    HRESULT r = decoderService->GetDecoderRenderTargets(*decoderID, 
+                                                        &formatCount, &formats);
+    if (FAILED(r))
+        return r;
+
+    shared_ptr<void> autoReleaseFormats(formats, CoTaskMemFree);
+    for (int i = 0; i < formatCount; ++i)
+    {
+        if (MAKEFOURCC('N', 'V', '1', '2') != formats[i])
+            continue;
+
+        // Get the available configurations.
+        DXVA2_VideoDesc desc = {0};
+        desc.SampleWidth = m_preDecode->GetWidth();
+        desc.SampleHeight = m_preDecode->GetHeight();
+        desc.UABProtectionLevel = 1;
+        desc.Format = formats[i];
+
+        UINT configCount;
+        DXVA2_ConfigPictureDecode* configs;
+        r = decoderService->GetDecoderConfigurations(*decoderID, &desc, NULL,
+                                                     &configCount, &configs);
+        if (FAILED(r))
+            continue;
+
+        shared_ptr<void> autoReleaseConfigs(configs, CoTaskMemFree);
+
+        // Find a supported configuration.
+        for (int j = 0; j < configCount; ++j)
+        {
+            *selectedConfig = configs[j];
+            if (2 == configs[j].ConfigBitstreamRaw)
+                return S_OK;
+        }
+
+        return configCount ? S_OK : E_FAIL;
+    }
+
+    return E_FAIL;
+}
+
 void CH264DecoderFilter::SetDXVA1PixelFormat(const DDPIXELFORMAT& pixelFormat)
 {
     memcpy(&m_pixelFormat, &pixelFormat, sizeof(m_pixelFormat));
@@ -871,7 +1031,7 @@ CH264DecoderFilter::CH264DecoderFilter(IUnknown* aggregator, HRESULT* r)
     : CTransformFilter(L"H264DecodeFilter", aggregator, CLSID_NULL)
     , m_mediaTypes()
     , m_preDecode()
-    , m_3DDevManager()
+    , m_devManager()
     , m_pixelFormat()
     , m_decodeAccess()
     , m_decoder()
