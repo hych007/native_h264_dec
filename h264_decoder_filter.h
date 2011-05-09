@@ -165,7 +165,6 @@ private:
     boost::shared_ptr<CCodecContext> m_preDecode;
     DDPIXELFORMAT m_pixelFormat;
     Lock m_decodeAccess;
-    boost::shared_ptr<CH264Decoder> m_decoder;
     int64 m_averageTimePerFrame;
 
     // DXVA2 members.
@@ -173,7 +172,9 @@ private:
     boost::shared_ptr<void> m_deviceHandle;
     boost::intrusive_ptr<IDirectXVideoDecoderService> m_decoderService;
     DXVA2_ConfigPictureDecode m_config;
-    std::vector<boost::intrusive_ptr<IDirect3DSurface9> > m_surfaces;
+
+    // Put it into a first-release position.
+    boost::shared_ptr<CH264Decoder> m_decoder;
 };
 
 #endif  // _H264_DECODER_FILTER_H_

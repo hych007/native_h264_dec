@@ -6,11 +6,13 @@
 #include <boost/intrusive_ptr.hpp>
 #include <boost/shared_ptr.hpp>
 #include <boost/scoped_ptr.hpp>
+#include <boost/scoped_array.hpp>
 
 #include <strmif.h>
 #include <d3dx9.h>
 #include <videoacc.h>
 #include <dxva.h>
+#include <dxva2api.h>
 
 #include "chromium/base/basictypes.h"
 
@@ -170,15 +172,52 @@ private:
 };
 
 //------------------------------------------------------------------------------
+struct IDirectXVideoDecoder;
 class CH264DXVA2Decoder : public CH264Decoder
 {
 public:
+    CH264DXVA2Decoder(
+        const GUID& decoderID, CCodecContext* preDecode,
+        IDirectXVideoDecoder* accel,
+        const std::vector<boost::intrusive_ptr<IDirect3DSurface9> >& surfaces);
     virtual ~CH264DXVA2Decoder();
 
-protected:
-    friend class CH264Decoder;
+    virtual bool Init(const DDPIXELFORMAT& pixelFormat,
+                      int64 averageTimePerFrame);
+    virtual HRESULT Decode(const void* data, int size, int64 start, int64 stop,
+                           IMediaSample* outSample, int* bytesUsed);
+    virtual void Flush();
 
-    CH264DXVA2Decoder();
+private:
+    HRESULT getFreeSurfaceIndex(
+        int* surfaceIndex, boost::intrusive_ptr<IMediaSample>* sampleToDeliver);
+    HRESULT beginFrame(IMediaSample* sample);
+    HRESULT endFrame();
+    HRESULT allocExecBuffer(int compType, int bufIndex,
+                            const void* nonBitStreamData, int size,
+                            void** DXVABuffer);
+    void reviseLastDataSize(int size);
+    HRESULT execute();
+    bool updateRefFrameSliceLong(int slice, int dataOffset, int sliceLength);
+    bool updateRefFrameSliceShort(int slice, int dataOffset, int sliceLength);
+    int buildBitStreamAndRefFrameSlice(const void* data, int size, void* dest);
+    bool addToStandby(int surfaceIndex,
+                      const boost::intrusive_ptr<IMediaSample>& sample,
+                      bool isRefPicture, int64 start, int64 stop, bool isField,
+                      int fieldType, int sliceType, int codecSpecific);
+
+    boost::intrusive_ptr<IDirectXVideoDecoder> m_accel;
+    boost::scoped_array<DXVA2_DecodeBufferDesc> m_managedBufDesc;
+    DXVA2_DecodeExecuteParams m_execParams;
+    DXVA_PicParams_H264 m_picParams;
+    std::vector<DXVA_Slice_H264_Long> m_sliceLong;
+    std::vector<DXVA_Slice_H264_Short> m_sliceShort;
+    bool m_useLongSlice;
+    int m_outPOC;
+    int64 m_outStart;
+    int64 m_lastFrameTime;
+    int64 m_estTimePerFrame;
+    std::vector<boost::intrusive_ptr<IDirect3DSurface9> > m_surfaces;
 };
 
 #endif  // _H264_DECODER_H_
