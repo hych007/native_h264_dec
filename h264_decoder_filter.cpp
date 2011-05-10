@@ -30,151 +30,7 @@ inline int getDecodeSurfacesCount()
 {
     return (win_util::GetWinVersion() >= win_util::WINVERSION_VISTA) ? 22 : 16;
 }
-}
 
-CDXVA2Sample::CDXVA2Sample(CDXVA2Allocator *alloc, HRESULT* r)
-    : CMediaSample(L"CDXVA2Sample", alloc, r, NULL, 0)
-    , m_surface()
-    , m_surfaceID(0)
-{
-}
-
-CDXVA2Sample::~CDXVA2Sample()
-{
-}
-
-HRESULT CDXVA2Sample::QueryInterface(const IID& ID, void** o)
-{
-    if (!o)
-        return E_POINTER;
-
-    if (IID_IMFGetService == ID)
-    {
-        IMFGetService* i = this;
-        i->AddRef();
-        *o = i;
-        return S_OK;
-    }
-
-    if (__uuidof(IDXVA2Sample) == ID)
-    {
-        IMFGetService* i = this;
-        i->AddRef();
-        *o = i;
-        return S_OK;
-    }
-
-    return CMediaSample::QueryInterface(ID, o);
-}
-
-
-ULONG CDXVA2Sample::AddRef()
-{
-    return CMediaSample::AddRef();
-}
-
-ULONG CDXVA2Sample::Release()
-{
-    // Return a temporary variable for thread safety.
-    ULONG ref = CMediaSample::Release();
-    return ref;
-}
-
-HRESULT CDXVA2Sample::GetService(const GUID& service, const IID& ID, void** o)
-{
-    if (service != MR_BUFFER_SERVICE)
-        return MF_E_UNSUPPORTED_SERVICE;
-
-    if (m_surface)
-        return E_NOINTERFACE;
-
-    return m_surface->QueryInterface(ID, o);
-}
-
-void CDXVA2Sample::setSurface(int surfaceID, IDirect3DSurface9* surface)
-{
-    m_surface = surface;
-    m_surfaceID = surfaceID;
-}
-
-//------------------------------------------------------------------------------
-CDXVA2Allocator::CDXVA2Allocator(CH264DecoderFilter* decoder,  HRESULT* r)
-    : CBaseAllocator(L"CDXVA2Allocator", NULL, r)
-    , m_decoder(decoder)
-//     , m_surfaces(NULL)
-//     , m_surfaceCount(0)
-{
-    assert(decoder);
-}
-
-CDXVA2Allocator::~CDXVA2Allocator()
-{
-    Free();
-}
-
-HRESULT CDXVA2Allocator::Alloc()
-{
-    CAutoLock lock(this);
-    HRESULT r = CBaseAllocator::Alloc();
-    if (FAILED(r))
-        return r;
-
-    // Free the old resources.
-    Free();
-
-    do
-    {
-        // Important : create samples in reverse order !
-        for (m_lAllocated = m_lCount - 1; m_lAllocated >= 0;
-            --m_lAllocated)
-        {
-            CDXVA2Sample* sample = new CDXVA2Sample(this, &r);
-            if (FAILED(r))
-                break;
-
-            IDirect3DSurface9* surf = m_decoder->GetSurface(m_lAllocated);
-            if (!surf)
-            {
-                r = E_UNEXPECTED;
-                break;
-            }
-
-            // Assign the Direct3D surface pointer and the index.
-            sample->setSurface(m_lAllocated, surf);
-
-            // Add to the sample list.
-            m_lFree.Add(sample);
-        }
-        if (FAILED(r))
-            break;
-
-        m_bChanged = FALSE;
-        return r;
-    } while (0);
-
-    Free();
-    return r;
-}
-
-void CDXVA2Allocator::Free()
-{
-    CMediaSample* sample = NULL;
-    m_decoder->FlushDXVADecoder();
-
-    do
-    {
-        sample = m_lFree.RemoveHead();
-        if (sample)
-            delete sample;
-
-    } while (sample);
-
-    m_lAllocated = 0;
-}
-
-//------------------------------------------------------------------------------
-namespace
-{
 const wchar_t* outputPinName = L"CH264DecoderOutputPin";
 const wchar_t* inputPinName = L"CH264DecoderInputPin";
 }
@@ -182,7 +38,6 @@ const wchar_t* inputPinName = L"CH264DecoderInputPin";
 CH264DecoderOutputPin::CH264DecoderOutputPin(CH264DecoderFilter* decoder, HRESULT* r)
     : CTransformOutputPin(outputPinName, decoder, r, outputPinName)
     , m_decoder(decoder)
-    , m_allocator(NULL)
     , m_DXVA1SurfCount(0)
     , m_DXVA1DecoderID(GUID_NULL)
     , m_uncompPixelFormat()
@@ -294,25 +149,6 @@ HRESULT CH264DecoderOutputPin::GetCreateVideoAcceleratorData(
     }
 
     return r;
-}
-
-HRESULT CH264DecoderOutputPin::InitAllocator(IMemAllocator** alloc)
-{
-    if (m_decoder->NeedCustomizeAllocator())
-    {
-        HRESULT r = S_FALSE;
-        intrusive_ptr<CDXVA2Allocator> a = new CDXVA2Allocator(m_decoder, &r);
-        if (FAILED(r))
-            return r;
-
-        m_allocator = a;
-
-        // Return the IMemAllocator interface.
-        return m_allocator->QueryInterface(IID_IMemAllocator,
-                                           reinterpret_cast<void**>(alloc));
-    }
-
-    return CTransformOutputPin::InitAllocator(alloc);
 }
 
 //------------------------------------------------------------------------------
