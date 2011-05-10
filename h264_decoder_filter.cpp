@@ -101,8 +101,8 @@ void CDXVA2Sample::setSurface(int surfaceID, IDirect3DSurface9* surface)
 CDXVA2Allocator::CDXVA2Allocator(CH264DecoderFilter* decoder,  HRESULT* r)
     : CBaseAllocator(L"CDXVA2Allocator", NULL, r)
     , m_decoder(decoder)
-    , m_surfaces(NULL)
-    , m_surfaceCount(0)
+//     , m_surfaces(NULL)
+//     , m_surfaceCount(0)
 {
     assert(decoder);
 }
@@ -114,63 +114,39 @@ CDXVA2Allocator::~CDXVA2Allocator()
 
 HRESULT CDXVA2Allocator::Alloc()
 {
-    intrusive_ptr<IDirect3DDeviceManager9> devManager =
-        m_decoder->Get3DDevManager();
-    if (!devManager)
-        return E_UNEXPECTED;
-
-    intrusive_ptr<IDirectXVideoAccelerationService> accelService;
-    HRESULT r = devManager->GetVideoService(
-        m_decoder->m_devHandle, IID_IDirectXVideoAccelerationService,
-        reinterpret_cast<void**>(&accelService));
-    if (FAILED(r) || !accelService)
-        return E_UNEXPECTED;
-
     CAutoLock lock(this);
-    r = CBaseAllocator::Alloc();
+    HRESULT r = CBaseAllocator::Alloc();
     if (FAILED(r))
         return r;
 
     // Free the old resources.
     Free();
 
-    m_surfaceCount = m_lCount;
-
-    // Allocate a new array of pointers.
-    m_surfaces = new IDirect3DSurface9*[m_surfaceCount];
-    memset(m_surfaces, 0, sizeof(m_surfaces[0]) * m_surfaceCount);
-
     do
     {
-        // Allocate the surfaces.
-        r = accelService->CreateSurface(720, 480, m_surfaceCount - 1,
-                                        m_decoder->m_videoDesc.Format,
-                                        D3DPOOL_DEFAULT, 0,
-                                        DXVA2_VideoDecoderRenderTarget,
-                                        m_surfaces, NULL);
-        if (FAILED(r))
-            break;
-
         // Important : create samples in reverse order !
-        for (m_lAllocated = m_surfaceCount - 1; m_lAllocated >= 0;
+        for (m_lAllocated = m_lCount - 1; m_lAllocated >= 0;
             --m_lAllocated)
         {
             CDXVA2Sample* sample = new CDXVA2Sample(this, &r);
             if (FAILED(r))
                 break;
 
+            IDirect3DSurface9* surf = m_decoder->GetSurface(m_lAllocated);
+            if (!surf)
+            {
+                r = E_UNEXPECTED;
+                break;
+            }
+
             // Assign the Direct3D surface pointer and the index.
-            sample->setSurface(m_lAllocated, m_surfaces[m_lAllocated]);
+            sample->setSurface(m_lAllocated, surf);
 
             // Add to the sample list.
             m_lFree.Add(sample);
         }
         if (FAILED(r))
             break;
-// 
-//         r = m_decoder->CreateDXVA2Decoder(m_lCount, m_surfaces);
-//         if (FAILED (r))
-//             break;
 
         m_bChanged = FALSE;
         return r;
@@ -193,20 +169,7 @@ void CDXVA2Allocator::Free()
 
     } while (sample);
 
-    if (m_surfaces)
-    {
-        for (long i = 0; i < m_surfaceCount; i++)
-        {
-            if (m_surfaces[i] != NULL)
-                m_surfaces[i]->Release();
-        }
-
-        delete [] m_surfaces;
-        m_surfaces = NULL;
-    }
-
     m_lAllocated = 0;
-    m_surfaceCount = 0;
 }
 
 //------------------------------------------------------------------------------
@@ -335,18 +298,19 @@ HRESULT CH264DecoderOutputPin::GetCreateVideoAcceleratorData(
 
 HRESULT CH264DecoderOutputPin::InitAllocator(IMemAllocator** alloc)
 {
-//     if (m_decoder->UseDXVA2())
-//     {
-//         HRESULT r = S_FALSE;
-//         intrusive_ptr<CDXVA2Allocator> a = new CDXVA2Allocator(m_decoder, &r);
-//         if (FAILED(r))
-//             return r;
-// 
-//         m_allocator = a;
-//         // Return the IMemAllocator interface.
-//         return m_allocator->QueryInterface(IID_IMemAllocator,
-//                                            reinterpret_cast<void**>(alloc));
-//     }
+    if (m_decoder->NeedCustomizeAllocator())
+    {
+        HRESULT r = S_FALSE;
+        intrusive_ptr<CDXVA2Allocator> a = new CDXVA2Allocator(m_decoder, &r);
+        if (FAILED(r))
+            return r;
+
+        m_allocator = a;
+
+        // Return the IMemAllocator interface.
+        return m_allocator->QueryInterface(IID_IMemAllocator,
+                                           reinterpret_cast<void**>(alloc));
+    }
 
     return CTransformOutputPin::InitAllocator(alloc);
 }
@@ -544,7 +508,9 @@ HRESULT CH264DecoderFilter::DecideBufferSize(IMemAllocator * allocator,
     if (requested.cbAlign < 1) 
         requested.cbAlign = 1;
 
-    if (requested.cBuffers < 1) 
+    if (m_decoder->NeedCustomizeAllocator())
+        requested.cBuffers = getDecodeSurfacesCount();
+    else if (requested.cBuffers < 1) 
         requested.cBuffers = 1;
 
     requested.cbBuffer = header.biSizeImage;
@@ -718,7 +684,6 @@ HRESULT CH264DecoderFilter::BreakConnect(PIN_DIRECTION dir)
     return S_OK;
 }
 
-extern bool flush_flag;
 HRESULT CH264DecoderFilter::NewSegment(REFERENCE_TIME start,
                                        REFERENCE_TIME stop, double rate)
 {
@@ -728,9 +693,6 @@ HRESULT CH264DecoderFilter::NewSegment(REFERENCE_TIME start,
         if (m_decoder)
             m_decoder->Flush();
     }
-
-    if (start > 300000000)
-        flush_flag = true;
 
     return CTransformFilter::NewSegment(start, stop, rate);
 }
@@ -881,22 +843,28 @@ HRESULT CH264DecoderFilter::ActivateDXVA2()
             continue;
 
         DXVA2_ConfigPictureDecode selectedConfig;
+        DXVA2_VideoDesc selectedFormat;
         r = ConfirmDXVA2UncompFormat(decoderService.get(), &devGUIDs[i],
-                                     &selectedConfig);
+                                     &selectedConfig, &selectedFormat);
         if (FAILED(r))
             continue;
+
+        r = configureEVRForDXVA2(getService.get());
+        if (FAILED(r))
+            return r;
 
         m_devManager = devManager;
         m_deviceHandle = deviceHandle;
         m_decoderService = decoderService;
         m_config = selectedConfig;
-        return CreateDXVA2Decoder(devGUIDs[i]);
+        return CreateDXVA2Decoder(devGUIDs[i], selectedFormat);
     }
 
     return E_FAIL;
 }
 
-HRESULT CH264DecoderFilter::CreateDXVA2Decoder(const GUID& decoderID)
+HRESULT CH264DecoderFilter::CreateDXVA2Decoder(const GUID& decoderID,
+                                               const DXVA2_VideoDesc& videoDesc)
 {
     assert(m_devManager);
     intrusive_ptr<IDirectXVideoAccelerationService> accelService;
@@ -915,7 +883,7 @@ HRESULT CH264DecoderFilter::CreateDXVA2Decoder(const GUID& decoderID)
     // Allocate the surfaces.
     r = accelService->CreateSurface(m_preDecode->GetWidth(),
                                     m_preDecode->GetHeight(), surfaceCount - 1,
-                                    m_videoDesc.Format, D3DPOOL_DEFAULT, 0,
+                                    videoDesc.Format, D3DPOOL_DEFAULT, 0,
                                     DXVA2_VideoDecoderRenderTarget,
                                     surfaces.get(), NULL);
     if (FAILED(r))
@@ -929,14 +897,13 @@ HRESULT CH264DecoderFilter::CreateDXVA2Decoder(const GUID& decoderID)
 
     intrusive_ptr<IDirectXVideoDecoder> accel;
     r = m_decoderService->CreateVideoDecoder(
-        decoderID, &m_videoDesc, &m_config, surfaces.get(), surfaceCount,
+        decoderID, &videoDesc, &m_config, surfaces.get(), surfaceCount,
         reinterpret_cast<IDirectXVideoDecoder**>(&accel));
     if (FAILED(r))
         return r;
 
     m_decoder.reset(
-        new CH264DXVA2Decoder(decoderID, m_preDecode.get(), accel.get(),
-                              surfList));
+        new CH264DXVA2Decoder(decoderID, m_preDecode.get(), accel.get()));
     return r;
 }
 
@@ -983,9 +950,10 @@ HRESULT CH264DecoderFilter::ConfirmDXVA1UncompFormat(IAMVideoAccelerator* accel,
 
 HRESULT CH264DecoderFilter::ConfirmDXVA2UncompFormat(
     IDirectXVideoDecoderService* decoderService, const GUID* decoderID,
-    DXVA2_ConfigPictureDecode* selectedConfig)
+    DXVA2_ConfigPictureDecode* selectedConfig, DXVA2_VideoDesc* selectedFormat)
 {
     assert(selectedConfig);
+    assert(selectedFormat);
     UINT formatCount;
     D3DFORMAT* formats;
     HRESULT r = decoderService->GetDecoderRenderTargets(*decoderID, 
@@ -1014,6 +982,7 @@ HRESULT CH264DecoderFilter::ConfirmDXVA2UncompFormat(
             continue;
 
         shared_ptr<void> autoReleaseConfigs(configs, CoTaskMemFree);
+        *selectedFormat = desc;
 
         // Find a supported configuration.
         for (int j = 0; j < static_cast<int>(configCount); ++j)
@@ -1032,6 +1001,17 @@ HRESULT CH264DecoderFilter::ConfirmDXVA2UncompFormat(
 void CH264DecoderFilter::SetDXVA1PixelFormat(const DDPIXELFORMAT& pixelFormat)
 {
     memcpy(&m_pixelFormat, &pixelFormat, sizeof(m_pixelFormat));
+}
+
+bool CH264DecoderFilter::NeedCustomizeAllocator()
+{
+    return (m_decoder && m_decoder->NeedCustomizeAllocator());
+}
+
+IDirect3DSurface9* CH264DecoderFilter::GetSurface(int n)
+{
+    return
+        (n < static_cast<int>(m_surfaces.size())) ? m_surfaces[n].get() : NULL;
 }
 
 CH264DecoderFilter::CH264DecoderFilter(IUnknown* aggregator, HRESULT* r)
@@ -1057,4 +1037,28 @@ CH264DecoderFilter::CH264DecoderFilter(IUnknown* aggregator, HRESULT* r)
     m_pOutput = new CH264DecoderOutputPin(this, r);
     if (r && FAILED(*r))
         return;
+}
+
+HRESULT CH264DecoderFilter::configureEVRForDXVA2(IMFGetService* getService)
+{
+    assert(getService);
+    intrusive_ptr<IDirectXVideoMemoryConfiguration> videoConfig;
+    HRESULT r = getService->GetService(MR_VIDEO_ACCELERATION_SERVICE,
+                                       IID_IDirectXVideoMemoryConfiguration,
+                                       reinterpret_cast<void**>(&videoConfig));
+    if (FAILED(r))
+        return r;
+
+    for (int i = 0; ; ++i)
+    {
+        DXVA2_SurfaceType surfType;
+        r = videoConfig->GetAvailableSurfaceTypeByIndex(i, &surfType);
+        if (FAILED(r))
+            break;
+
+        if (DXVA2_SurfaceType_DecoderRenderTarget == surfType)
+            return videoConfig->SetSurfaceType(surfType);
+    }
+
+    return r;
 }

@@ -74,8 +74,8 @@ protected:
 
 private:
     CH264DecoderFilter* m_decoder;
-    IDirect3DSurface9** m_surfaces;
-    int m_surfaceCount;
+//     IDirect3DSurface9** m_surfaces;
+//     int m_surfaceCount;
 };
 
 //------------------------------------------------------------------------------
@@ -137,30 +137,34 @@ public:
                           const AMVAUncompDataInfo& uncompInfo,
                           int surfaceCount);
     HRESULT ActivateDXVA2();
-    HRESULT CreateDXVA2Decoder(const GUID& decoderID);
+    HRESULT CreateDXVA2Decoder(const GUID& decoderID,
+                               const DXVA2_VideoDesc& videoDesc);
     bool IsFormatSupported(const GUID& formatID);
     HRESULT ConfirmDXVA1UncompFormat(IAMVideoAccelerator* accel,
                                      const GUID* decoderID,
                                      DDPIXELFORMAT* pixelFormat);
     HRESULT ConfirmDXVA2UncompFormat(
         IDirectXVideoDecoderService* decoderService, const GUID* decoderID,
-        DXVA2_ConfigPictureDecode* selectedConfig);
+        DXVA2_ConfigPictureDecode* selectedConfig,
+        DXVA2_VideoDesc* selectedFormat);
     void SetDXVA1PixelFormat(const DDPIXELFORMAT& pixelFormat);
+    bool NeedCustomizeAllocator();
+    IDirect3DSurface9* GetSurface(int n);
+    void FlushDXVADecoder() {}
 
     boost::intrusive_ptr<IDirect3DDeviceManager9> Get3DDevManager()
     {
         return m_devManager;
     }
 
-    DXVA2_VideoDesc m_videoDesc;
     HANDLE m_devHandle;
-    void FlushDXVADecoder() {}
-    bool UseDXVA2() { return false; }
 
 protected:
     CH264DecoderFilter(IUnknown* aggregator, HRESULT* r);
 
 private:
+    HRESULT configureEVRForDXVA2(IMFGetService* getService);
+
     std::vector<boost::shared_ptr<CMediaType> > m_mediaTypes;
     boost::shared_ptr<CCodecContext> m_preDecode;
     DDPIXELFORMAT m_pixelFormat;
@@ -172,6 +176,7 @@ private:
     boost::shared_ptr<void> m_deviceHandle;
     boost::intrusive_ptr<IDirectXVideoDecoderService> m_decoderService;
     DXVA2_ConfigPictureDecode m_config;
+    std::vector<boost::intrusive_ptr<IDirect3DSurface9> > m_surfaces;
 
     // Put it into a first-release position.
     boost::shared_ptr<CH264Decoder> m_decoder;

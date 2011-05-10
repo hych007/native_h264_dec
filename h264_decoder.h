@@ -31,6 +31,7 @@ public:
                            IMediaSample* outSample, int* bytesUsed) = 0;
     virtual HRESULT DisplayNextFrame(IMediaSample* sample) { return E_NOTIMPL; }
     virtual void Flush();
+    virtual bool NeedCustomizeAllocator() { return false; }
 
 protected:
     struct TDeocdedPicDesc
@@ -176,10 +177,8 @@ struct IDirectXVideoDecoder;
 class CH264DXVA2Decoder : public CH264Decoder
 {
 public:
-    CH264DXVA2Decoder(
-        const GUID& decoderID, CCodecContext* preDecode,
-        IDirectXVideoDecoder* accel,
-        const std::vector<boost::intrusive_ptr<IDirect3DSurface9> >& surfaces);
+    CH264DXVA2Decoder(const GUID& decoderID, CCodecContext* preDecode,
+                      IDirectXVideoDecoder* accel);
     virtual ~CH264DXVA2Decoder();
 
     virtual bool Init(const DDPIXELFORMAT& pixelFormat,
@@ -187,6 +186,7 @@ public:
     virtual HRESULT Decode(const void* data, int size, int64 start, int64 stop,
                            IMediaSample* outSample, int* bytesUsed);
     virtual void Flush();
+    virtual bool NeedCustomizeAllocator() { return true; }
 
 private:
     HRESULT getFreeSurfaceIndex(
@@ -217,7 +217,6 @@ private:
     int64 m_outStart;
     int64 m_lastFrameTime;
     int64 m_estTimePerFrame;
-    std::vector<boost::intrusive_ptr<IDirect3DSurface9> > m_surfaces;
 };
 
 #endif  // _H264_DECODER_H_

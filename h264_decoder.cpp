@@ -462,7 +462,6 @@ bool CH264DXVA1Decoder::Init(const DDPIXELFORMAT& pixelFormat,
     return true;
 }
 
-bool flush_flag = false;
 HRESULT CH264DXVA1Decoder::Decode(const void* data, int size, int64 start,
                                   int64 stop, IMediaSample* outSample,
                                   int* bytesUsed)
@@ -909,15 +908,13 @@ HRESULT CH264DXVA1Decoder::displayNextFrame(IMediaSample* sample)
 
 //------------------------------------------------------------------------------
 const int decodeBufDescCount = 3;
-CH264DXVA2Decoder::CH264DXVA2Decoder(
-    const GUID& decoderID, CCodecContext* preDecode,
-    IDirectXVideoDecoder* accel,
-    const vector<intrusive_ptr<IDirect3DSurface9> >& surfaces)
+CH264DXVA2Decoder::CH264DXVA2Decoder(const GUID& decoderID,
+                                     CCodecContext* preDecode,
+                                     IDirectXVideoDecoder* accel)
     : CH264Decoder(decoderID, preDecode)
     , m_accel(accel)
     , m_managedBufDesc(new DXVA2_DecodeBufferDesc[decodeBufDescCount])
     , m_execParams()
-    , m_surfaces(surfaces)
 {
     assert(accel);
 
