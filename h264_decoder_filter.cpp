@@ -875,7 +875,7 @@ HRESULT CH264DecoderFilter::ActivateDXVA2()
         return r;
 
     shared_ptr<void> autoReleaseGUID(devGUIDs, CoTaskMemFree);
-    for (int i = 0; i < devGUIDCount; ++i)
+    for (int i = 0; i < static_cast<int>(devGUIDCount); ++i)
     {
         if (!IsFormatSupported(devGUIDs[i]))
             continue;
@@ -922,14 +922,21 @@ HRESULT CH264DecoderFilter::CreateDXVA2Decoder(const GUID& decoderID)
         return r;
 
     // Get the surfaces managed.
+    std::vector<boost::intrusive_ptr<IDirect3DSurface9> > surfList;
     for (int i = 0; i < surfaceCount; ++i)
-        m_surfaces.push_back(intrusive_ptr<IDirect3DSurface9>(surfaces[i]));
+        surfList.push_back(
+            intrusive_ptr<IDirect3DSurface9>(surfaces[i], false));
 
     intrusive_ptr<IDirectXVideoDecoder> accel;
     r = m_decoderService->CreateVideoDecoder(
         decoderID, &m_videoDesc, &m_config, surfaces.get(), surfaceCount,
         reinterpret_cast<IDirectXVideoDecoder**>(&accel));
+    if (FAILED(r))
+        return r;
 
+    m_decoder.reset(
+        new CH264DXVA2Decoder(decoderID, m_preDecode.get(), accel.get(),
+                              surfList));
     return r;
 }
 
@@ -987,7 +994,7 @@ HRESULT CH264DecoderFilter::ConfirmDXVA2UncompFormat(
         return r;
 
     shared_ptr<void> autoReleaseFormats(formats, CoTaskMemFree);
-    for (int i = 0; i < formatCount; ++i)
+    for (int i = 0; i < static_cast<int>(formatCount); ++i)
     {
         if (MAKEFOURCC('N', 'V', '1', '2') != formats[i])
             continue;
@@ -1009,7 +1016,7 @@ HRESULT CH264DecoderFilter::ConfirmDXVA2UncompFormat(
         shared_ptr<void> autoReleaseConfigs(configs, CoTaskMemFree);
 
         // Find a supported configuration.
-        for (int j = 0; j < configCount; ++j)
+        for (int j = 0; j < static_cast<int>(configCount); ++j)
         {
             *selectedConfig = configs[j];
             if (2 == configs[j].ConfigBitstreamRaw)
