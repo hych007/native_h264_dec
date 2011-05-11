@@ -13,7 +13,7 @@
 #include "common/dshow_util.h"
 #include "common/hardware_env.h"
 #include "common/intrusive_ptr_helper.h"
-#include "PODtypes.h"
+#include "podtypes.h"
 #include "libavcodec/dsputil.h"
 #include "libavcodec/avcodec.h"
 #include "libavcodec/h264.h"
@@ -23,6 +23,7 @@ using boost::shared_ptr;
 using boost::intrusive_ptr;
 
 extern "C" int av_h264_decode_frame(void*, int*, int64*, const void*, int);
+extern "C" void av_init_packet(AVPacket* p);
 
 namespace
 {
@@ -499,11 +500,15 @@ int CCodecContext::Decode(CVideoFrame* frame, const void* buf, int size)
     assert(frame);
     frame->SetComplete(false);
 
+    AVPacket packet;
+    av_init_packet(&packet);
+    packet.data = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf));
+    packet.size = size;
+
     int frameFinished;
-    int usedBytes = avcodec_decode_video(
+    int usedBytes = avcodec_decode_video2(
         reinterpret_cast<AVCodecContext*>(m_cont.get()), frame->getFrame(),
-        &frameFinished, reinterpret_cast<const uint8_t*>(buf),
-        size);
+        &frameFinished, &packet);
 
     frame->SetComplete(frameFinished && frame->getFrame()->data[0]);
     return usedBytes;

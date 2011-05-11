@@ -2,13 +2,8 @@
 
 #include <cassert>
 
-#include <boost/function.hpp>
-#include <boost/bind.hpp>
 #include <initguid.h>
 #include <dvdmedia.h>
-#include <mfapi.h>
-#include <mferror.h>
-#include <evr.h>
 
 #include "ffmpeg.h"
 #include "h264_decoder.h"
@@ -21,8 +16,6 @@
 using std::vector;
 using boost::shared_ptr;
 using boost::intrusive_ptr;
-using boost::function;
-using boost::bind;
 
 namespace
 {
@@ -35,7 +28,8 @@ const wchar_t* outputPinName = L"CH264DecoderOutputPin";
 const wchar_t* inputPinName = L"CH264DecoderInputPin";
 }
 
-CH264DecoderOutputPin::CH264DecoderOutputPin(CH264DecoderFilter* decoder, HRESULT* r)
+CH264DecoderOutputPin::CH264DecoderOutputPin(CH264DecoderFilter* decoder,
+                                             HRESULT* r)
     : CTransformOutputPin(outputPinName, decoder, r, outputPinName)
     , m_decoder(decoder)
     , m_DXVA1SurfCount(0)
@@ -154,19 +148,16 @@ HRESULT CH264DecoderOutputPin::GetCreateVideoAcceleratorData(
 //------------------------------------------------------------------------------
 namespace
 {
-struct { const GUID& SubType; int PlaneCount; int FourCC; } supportedFormats[] =
+struct { const GUID& SubType; int16 PlaneCount; int16 BitCount; int FourCC; }
+    supportedFormats[] =
 {
     // Hardware formats
-    { DXVA2_ModeH264_E, 1, MAKEFOURCC('d','x','v','a') },
-    { DXVA2_ModeH264_F, 1, MAKEFOURCC('d','x','v','a') },
-    { MEDIASUBTYPE_NV12, 1, MAKEFOURCC('d','x','v','a') },
-    { MEDIASUBTYPE_NV12, 1, MAKEFOURCC('D','X','V','A') },
-    { MEDIASUBTYPE_NV12, 1, MAKEFOURCC('D','x','V','A') },
-    { MEDIASUBTYPE_NV12, 1, MAKEFOURCC('D','X','v','A') },
+    { DXVA_ModeH264_E, 1, 12, MAKEFOURCC('d','x','v','a') },
+    { DXVA_ModeH264_F, 1, 12, MAKEFOURCC('d','x','v','a') },
 
     // Software formats
-    { MEDIASUBTYPE_YV12, 3, MAKEFOURCC('Y','V','1','2') },
-    { MEDIASUBTYPE_YUY2, 3, MAKEFOURCC('Y','U','Y','2') }
+    { MEDIASUBTYPE_YV12, 3, 12, MAKEFOURCC('Y','V','1','2') },
+    { MEDIASUBTYPE_YUY2, 1, 16, MAKEFOURCC('Y','U','Y','2') }
 };
 
 enum KDXVAH264Compatibility
@@ -401,7 +392,6 @@ HRESULT CH264DecoderFilter::SetMediaType(PIN_DIRECTION dir,
 
         bitmapHeader.biWidth = width;
         bitmapHeader.biHeight = height;
-        bitmapHeader.biBitCount = 12;
         bitmapHeader.biSizeImage =
             bitmapHeader.biWidth * bitmapHeader.biHeight *
             bitmapHeader.biBitCount >> 3;
@@ -460,6 +450,7 @@ HRESULT CH264DecoderFilter::SetMediaType(PIN_DIRECTION dir,
             myType->SetSubtype(&supportedFormats[i].SubType);
             myType->SetFormatType(&FORMAT_VideoInfo);
 
+            header.bmiHeader.biBitCount = supportedFormats[i].BitCount;
             header.bmiHeader.biPlanes = supportedFormats[i].PlaneCount;
             header.bmiHeader.biCompression = supportedFormats[i].FourCC;
             myType->SetFormat(reinterpret_cast<BYTE*>(&header), sizeof(header));
@@ -469,6 +460,7 @@ HRESULT CH264DecoderFilter::SetMediaType(PIN_DIRECTION dir,
             shared_ptr<CMediaType> myType2(new CMediaType(*myType));
             myType2->SetFormatType(&FORMAT_VideoInfo2);
 
+            header2.bmiHeader.biBitCount = supportedFormats[i].BitCount;
             header2.bmiHeader.biPlanes = supportedFormats[i].PlaneCount;
             header2.bmiHeader.biCompression = supportedFormats[i].FourCC;
             myType2->SetFormat(reinterpret_cast<BYTE*>(&header2),

@@ -3,9 +3,6 @@
 #include <limits>
 
 #include <initguid.h>
-#include <dxva2api.h>
-#include <mfidl.h>
-#include <mfapi.h>
 
 #include "ffmpeg.h"
 #include "h264_detail.h"
@@ -36,23 +33,6 @@ const int maxSlices = 16;
         PlatformThread::YieldCurrentThread();\
     } while (++retry < maxRetry);\
 }
-
-int compTypeToBufType(int DXVA2CompType)
-{
-    if (DXVA2CompType <= DXVA2_BitStreamDateBufferType)
-        return DXVA2CompType + 1;
-
-    switch (DXVA2CompType)
-    {
-        case DXVA2_MotionVectorBuffer:
-            return DXVA_MOTION_VECTOR_BUFFER;
-        case DXVA2_FilmGrainBuffer:
-            return DXVA_FILM_GRAIN_BUFFER;
-        default:
-            assert(false);
-            return DXVA_COMPBUFFER_TYPE_THAT_IS_NOT_USED;
-    }
-}
 }
 
 enum KNALUType
@@ -73,117 +53,120 @@ enum KNALUType
 
 class CH264NALU
 {
-private :
-    int forbidden_bit;          // should be always FALSE
-    int nal_reference_idc;      // NALU_PRIORITY_xxxx
-    KNALUType nal_unit_type;    // NALU_TYPE_xxxx    
+public:
+    KNALUType GetType() const { return unitType; };
+    bool IsRefFrame() const { return (referenceIdc != 0); };
 
-    int m_nNALStartPos;         // NALU start (including startcode / size)
-    int m_nNALDataPos;          // Useful part
-    unsigned m_nDataLen;        // Length of the NAL unit (Excluding the start code, which does not belong to the NALU)
-
-    const BYTE* m_pBuffer;
-    int m_nCurPos;
-    int m_nNextRTP;
-    int m_nSize;
-    int m_nNALSize;
-
-    bool MoveToNextStartcode();
-
-public :
-    KNALUType GetType() const { return nal_unit_type; };
-    bool IsRefFrame() const { return (nal_reference_idc != 0); };
-
-    int GetDataLength() const { return m_nCurPos - m_nNALDataPos; };
-    const BYTE* GetDataBuffer() { return m_pBuffer + m_nNALDataPos; };
+    int GetDataLength() const { return m_curPos - m_dataPos; };
+    const BYTE* GetDataBuffer() { return m_buffer + m_dataPos; };
     int GetRoundedDataLength() const
     {
-        int nSize = m_nCurPos - m_nNALDataPos;
-        return nSize + 128 - (nSize % 128);
+        int size = m_curPos - m_dataPos;
+        return size + 128 - (size % 128);
     }
 
-    int GetLength() const { return m_nCurPos - m_nNALStartPos; };
-    const BYTE* GetNALBuffer() { return m_pBuffer + m_nNALStartPos; };
-    bool IsEOF() const { return m_nCurPos >= m_nSize; };
+    int GetLength() const { return m_curPos - m_startPos; };
+    const BYTE* GetNALBuffer() { return m_buffer + m_startPos; };
+    bool IsEOF() const { return m_curPos >= m_size; };
 
-    void SetBuffer (const void* pBuffer, int nSize, int nNALSize);
+    void SetBuffer (const void* buffer, int size, int NALSize);
     bool ReadNext();
-    int GetRawDataSize() const { return m_nSize; }
-    const void* GetRawDataBuffer() const { return m_pBuffer; }
+    int GetRawDataSize() const { return m_size; }
+    const void* GetRawDataBuffer() const { return m_buffer; }
+
+private:
+    bool moveToNextStartcode();
+
+    int forbiddenBit;       // should be always FALSE
+    int referenceIdc;       // NALU_PRIORITY_xxxx
+    KNALUType unitType;     // NALU_TYPE_xxxx    
+
+    int m_startPos;         // NALU start (including startcode / size)
+    int m_dataPos;          // Useful part
+    unsigned m_dataLen;     // Length of the NAL unit (Excluding the start
+                            // code, which does not belong to the NALU)
+
+    const BYTE* m_buffer;
+    int m_curPos;
+    int m_nextRTP;
+    int m_size;
+    int m_NALSize;
 };
 
-void CH264NALU::SetBuffer(const void* pBuffer, int nSize, int nNALSize)
+void CH264NALU::SetBuffer(const void* buffer, int size, int NALSize)
 {
-    m_pBuffer = reinterpret_cast<const BYTE*>(pBuffer);
-    m_nSize = nSize;
-    m_nNALSize = nNALSize;
-    m_nCurPos = 0;
-    m_nNextRTP = 0;
+    m_buffer = reinterpret_cast<const BYTE*>(buffer);
+    m_size = size;
+    m_NALSize = NALSize;
+    m_curPos = 0;
+    m_nextRTP = 0;
 
-    m_nNALStartPos = 0;
-    m_nNALDataPos = 0;
+    m_startPos = 0;
+    m_dataPos = 0;
 }
 
-bool CH264NALU::MoveToNextStartcode()
+bool CH264NALU::moveToNextStartcode()
 {
-    int nBuffEnd =
-        (m_nNextRTP > 0) ? std::min(m_nNextRTP, m_nSize-4) : m_nSize-4;
+    int buffEnd =
+        (m_nextRTP > 0) ? std::min(m_nextRTP, m_size - 4) : m_size - 4;
 
-    for (int i = m_nCurPos; i < nBuffEnd; i++)
+    for (int i = m_curPos; i < buffEnd; i++)
     {
-        if ((*((DWORD*)(m_pBuffer+i)) & 0x00FFFFFF) == 0x00010000)
+        if ((*(reinterpret_cast<const DWORD*>(m_buffer + i)) & 0x00FFFFFF) ==
+            0x00010000)
         {
             // Find next AnnexB Nal
-            m_nCurPos = i;
+            m_curPos = i;
             return true;
         }
     }
 
-    if ((m_nNALSize != 0) && (m_nNextRTP < m_nSize))
+    if (m_NALSize && (m_nextRTP < m_size))
     {
-        m_nCurPos = m_nNextRTP;
+        m_curPos = m_nextRTP;
         return true;
     }
 
-    m_nCurPos = m_nSize;
+    m_curPos = m_size;
     return false;
 }
 
 bool CH264NALU::ReadNext()
 {
-    if (m_nCurPos >= m_nSize)
+    if (m_curPos >= m_size)
         return false;
 
-    if ((m_nNALSize != 0) && (m_nCurPos == m_nNextRTP))
+    if (m_NALSize && (m_curPos == m_nextRTP))
     {
-        // RTP Nalu type : (XX XX) XX XX NAL..., with XX XX XX XX or XX XX equal to NAL size
-        m_nNALStartPos    = m_nCurPos;
-        m_nNALDataPos    = m_nCurPos + m_nNALSize;
-        int nTemp            = 0;
-        for (int i=0; i<m_nNALSize; i++)
-        {
-            nTemp = (nTemp << 8) + m_pBuffer[m_nCurPos++];
-        }
-        m_nNextRTP += nTemp + m_nNALSize;
-        MoveToNextStartcode();
+        // RTP Nalu type : (XX XX) XX XX NAL..., with XX XX XX XX or XX XX equal
+        // to NAL size
+        m_startPos = m_curPos;
+        m_dataPos = m_curPos + m_NALSize;
+        int temp = 0;
+        for (int i = 0; i < m_NALSize; ++i)
+            temp = (temp << 8) + m_buffer[m_curPos++];
+
+        m_nextRTP += temp + m_NALSize;
+        moveToNextStartcode();
     }
     else
     {
         // Remove trailing bits
-        while (!m_pBuffer[m_nCurPos] &&
-            ((*((DWORD*)(m_pBuffer+m_nCurPos)) & 0x00FFFFFF) != 0x00010000))
-            m_nCurPos++;
+        while (!m_buffer[m_curPos] &&
+            ((*(reinterpret_cast<const DWORD*>(m_buffer + m_curPos)) &
+                0x00FFFFFF) != 0x00010000))
+            m_curPos++;
 
         // AnnexB Nalu : 00 00 01 NAL...
-        m_nNALStartPos    = m_nCurPos;
-        m_nCurPos       += 3;
-        m_nNALDataPos    = m_nCurPos;
-        MoveToNextStartcode();
+        m_startPos = m_curPos;
+        m_curPos += 3;
+        m_dataPos = m_curPos;
+        moveToNextStartcode();
     }
 
-    forbidden_bit = (m_pBuffer[m_nNALDataPos]>>7) & 1;
-    nal_reference_idc = (m_pBuffer[m_nNALDataPos]>>5) & 3;
-    nal_unit_type = (KNALUType)(m_pBuffer[m_nNALDataPos] & 0x1f);
+    forbiddenBit = (m_buffer[m_dataPos]>>7) & 1;
+    referenceIdc = (m_buffer[m_dataPos]>>5) & 3;
+    unitType = static_cast<KNALUType>(m_buffer[m_dataPos] & 0x1f);
     return true;
 }
 
@@ -297,28 +280,26 @@ HRESULT CH264DXVA1Decoder::CDXVABuffers::AllocExecBuffer(
     int compType, int bufIndex, const void* nonBitStreamData, int size,
     void** DXVABuffer)
 {
-    int bufType = compTypeToBufType(compType);
-
     void* allocated;
     LONG stride;
-    HRESULT r = m_accel->GetBuffer(bufType, bufIndex, FALSE, &allocated,
+    HRESULT r = m_accel->GetBuffer(compType, bufIndex, FALSE, &allocated,
                                    &stride);
     assert(SUCCEEDED(r));
     if (SUCCEEDED(r))
     {
-        assert((compType != DXVA2_BitStreamDateBufferType) || DXVABuffer);
-        if (compType != DXVA2_BitStreamDateBufferType)
+        assert((compType != DXVA_BITSTREAM_DATA_BUFFER) || DXVABuffer);
+        if (compType != DXVA_BITSTREAM_DATA_BUFFER)
             memcpy(allocated, nonBitStreamData, size);
         else if (DXVABuffer)
             *DXVABuffer = allocated;
 
         AMVABUFFERINFO info = {0};
-        info.dwTypeIndex = bufType;
+        info.dwTypeIndex = compType;
         info.dwDataSize = size;
         m_bufInfo.push_back(info);
 
         DXVA_BufferDescription desc = {0};
-        desc.dwTypeIndex = bufType;
+        desc.dwTypeIndex = compType;
         desc.dwDataSize = size;
         m_bufDesc.push_back(desc);
         return true;
@@ -508,7 +489,7 @@ HRESULT CH264DXVA1Decoder::Decode(const void* data, int size, int64 start,
     m_picParams.StatusReportFeedbackNumber++;
 
     // Send picture parameters
-    r = m_execBuffers.AllocExecBuffer(DXVA2_PictureParametersBufferType, 0,
+    r = m_execBuffers.AllocExecBuffer(DXVA_PICTURE_DECODE_BUFFER, 0,
                                       &m_picParams, sizeof(m_picParams), NULL);
     if (FAILED(r))
         return r;
@@ -519,7 +500,7 @@ HRESULT CH264DXVA1Decoder::Decode(const void* data, int size, int64 start,
 
     // Add bitstream, slice control and quantization matrix.
     void* DXVABuffer = NULL;
-    r = m_execBuffers.AllocExecBuffer(DXVA2_BitStreamDateBufferType, 0, NULL, 0,
+    r = m_execBuffers.AllocExecBuffer(DXVA_BITSTREAM_DATA_BUFFER, 0, NULL, 0,
                                       &DXVABuffer);
     if (FAILED(r))
         return r;
@@ -535,12 +516,12 @@ HRESULT CH264DXVA1Decoder::Decode(const void* data, int size, int64 start,
         m_useLongSlice ?
             sizeof(m_sliceLong[0]) * slice :
             sizeof(m_sliceShort[0]) * slice;
-    r = m_execBuffers.AllocExecBuffer(DXVA2_SliceControlBufferType, 0, execBuf,
+    r = m_execBuffers.AllocExecBuffer(DXVA_SLICE_CONTROL_BUFFER, 0, execBuf,
                                       execBufSize, NULL);
     if (FAILED(r))
         return r;
 
-    r = m_execBuffers.AllocExecBuffer(DXVA2_InverseQuantizationMatrixBufferType,
+    r = m_execBuffers.AllocExecBuffer(DXVA_INVERSE_QUANTIZATION_MATRIX_BUFFER,
                                       0, &scalingMatrix, sizeof(scalingMatrix),
                                       NULL);
     if (FAILED(r))
@@ -727,8 +708,9 @@ int CH264DXVA1Decoder::buildBitStreamAndRefFrameSlice(const void* data,
         if ((NALU_TYPE_SLICE == block.GetType()) ||
             (NALU_TYPE_IDR == block.GetType()))
         {
+            // Skip the NALU if the data length is below 0.
             if (block.GetDataLength() < 0)
-                return -1; // Bad NALU.
+                break;
 
             // For AVC1, put startcode 0x000001
             destCursor[0] = 0;

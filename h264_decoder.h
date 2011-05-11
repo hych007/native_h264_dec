@@ -12,7 +12,6 @@
 #include <d3dx9.h>
 #include <videoacc.h>
 #include <dxva.h>
-#include <dxva2api.h>
 
 #include "chromium/base/basictypes.h"
 

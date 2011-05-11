@@ -9,8 +9,6 @@
 #include <streams.h>
 #include <d3dx9.h>
 #include <videoacc.h>
-#include <dxva2api.h>
-#include <mfidl.h>
 
 #include "chromium/base/basictypes.h"
 #include "chromium/base/lock.h"
@@ -80,8 +78,6 @@ protected:
     CH264DecoderFilter(IUnknown* aggregator, HRESULT* r);
 
 private:
-    HRESULT configureEVRForDXVA2(IMFGetService* getService);
-
     std::vector<boost::shared_ptr<CMediaType> > m_mediaTypes;
     boost::shared_ptr<CCodecContext> m_preDecode;
     DDPIXELFORMAT m_pixelFormat;
